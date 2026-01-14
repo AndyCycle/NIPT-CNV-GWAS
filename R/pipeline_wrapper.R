@@ -68,4 +68,4 @@ run_pipeline_smart <- function(work_dir, prefix,
 }
 
 # 辅助小函数，防止 input_args$step4$title 为 NULL 时报错
-%||%` <- function(a, b) if (!is.null(a)) a else b
+`%||%` <- function(a, b) if (!is.null(a)) a else b
