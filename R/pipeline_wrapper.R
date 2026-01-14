@@ -49,5 +49,23 @@ run_pipeline_smart <- function(work_dir, prefix,
     ), input_args$step3))
   }
 
+  # --- Step 4 Check ---
+  plot_file <- paste0(full_prefix, "_Manhattan.png")
+
+  if (!force_overwrite && file.exists(plot_file)) {
+      message(">> Step 4 output exists. Skipping Visualization.")
+  } else {
+      message(">> Running Step 4: Visualization...")
+      # 调用上面封装的函数
+      visualize_gwas(
+          gwas_file = gwas_out,
+          output_prefix = full_prefix,
+          title = input_args$step4$title %||% "CNV-GWAS Analysis" # %||% 需自定义或用 ifelse
+      )
+  }
+
   message(">> Pipeline finished.")
 }
+
+# 辅助小函数，防止 input_args$step4$title 为 NULL 时报错
+%||%` <- function(a, b) if (!is.null(a)) a else b
