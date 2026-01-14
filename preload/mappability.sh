@@ -10,20 +10,19 @@
 
 echo "Mappability processing started at: $(date)"
 
-export PATH=/share/home/lsy_student/miniconda3/bin:$PATH
+export PATH="your_conda_path/bin:$PATH"
 
 # 加载必要的模块或激活环境
-# module load HMMCopy_utils/1.0  # 替换为实际的模块名称或加载命令
 source activate hmmcopy  # 激活 Conda 环境
 
 # 设置变量
 MAP_COUNTER=mapCounter
 
 # 输入文件路径
-MAPPABILITY_BW="/share/home/lsy_student/chenyanchao/GDM/CNV/HMMcopy/preload/k100.Umap.MultiTrackMappability.bw"
+MAPPABILITY_BW="k100.Umap.MultiTrackMappability.bw"
 
 # 输出目录
-OUTPUT_DIR="/share/home/lsy_student/chenyanchao/GDM/CNV/HMMcopy/preload/mappability"  # 替换为实际的输出目录
+OUTPUT_DIR="preload/mappability"  # 替换为实际的输出目录
 mkdir -p "${OUTPUT_DIR}"
 
 # === 定义标准染色体列表 ===
