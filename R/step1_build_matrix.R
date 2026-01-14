@@ -11,10 +11,12 @@
 #' @param n_cores Number of cores for parallel processing.
 #' @param qc_mapd_th Threshold for MAPD (samples > th rejected).
 #' @param qc_median_th Threshold for Abs Median (samples > th rejected).
+#' @param file_pattern Regex pattern to select specific WIG files.
 #' @export
 build_cnv_matrix <- function(input_dir, output_prefix, gc_file, map_file,
                              batch_size = 500, n_cores = 10,
-                             qc_mapd_th = 0.35, qc_median_th = 0.2) {
+                             qc_mapd_th = 0.35, qc_median_th = 0.2,
+                             file_pattern = "\\.readcounts\\.wig$") {
   report_mem("Step1: Start")
   # Check system requirements
   if (.Platform$OS.type != "unix") stop("This package requires a Unix-like OS (Linux/macOS) for efficient IO.")
@@ -25,7 +27,8 @@ build_cnv_matrix <- function(input_dir, output_prefix, gc_file, map_file,
   out_bins <- paste0(output_prefix, ".bin_coords.txt")
 
   # File scanning
-  wig_files <- list.files(input_dir, pattern = "\\.readcounts\\.wig$", full.names = TRUE, recursive = TRUE)
+  # 使用参数 file_pattern 替代原来的硬编码字符串
+  wig_files <- list.files(input_dir, pattern = file_pattern, full.names = TRUE, recursive = TRUE)
   if (length(wig_files) == 0) stop("No WIG files found in input_dir.")
 
   message(sprintf("Found %d samples. Starting build process...", length(wig_files)))
