@@ -68,7 +68,11 @@ build_cnv_matrix <- function(input_dir, output_prefix, gc_file, map_file,
 
         if (mapd > qc_mapd_th || abs(med) > qc_median_th) return(NULL)
 
-        return(list(id = sub("\\.readcounts\\.wig$", "", basename(f)), data = vals))
+        # 修改这里：在生成 id 时直接去除后缀
+        raw_id <- sub("\\.readcounts\\.wig$", "", basename(f))
+        clean_id <- sub("_[0-9]+bp$", "", raw_id) # 提前清洗 _xxxxbp 的窗口后缀（这里涉及原始的wig文件命名，例如原本命名为CL100164113_L01_1_20000bp.readcounts.wig）
+
+        return(list(id = clean_id, data = vals))
       }, error = function(e) NULL)
     }, mc.cores = n_cores)
 
