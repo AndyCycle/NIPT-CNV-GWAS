@@ -10,7 +10,7 @@
 
 echo "GC Content processing started at: $(date)"
 
-export PATH=/share/home/lsy_chenyanchao/software/miniconda3/bin:$PATH
+export PATH="your_conda_path/bin:$PATH"
 
 source activate hmmcopy  # 激活 Conda 环境
 
@@ -18,10 +18,10 @@ source activate hmmcopy  # 激活 Conda 环境
 GC_COUNTER=gcCounter
 
 # 输入文件路径
-FASTA_FILE="/share/home/lsy_liusiyang/20220708_Alignment/hg38/Homo_sapiens_assembly38.fasta"
+FASTA_FILE="Homo_sapiens_assembly38.fasta"
 
 # 输出目录
-OUTPUT_DIR="/share/home/lsy_student/chenyanchao/GDM/CNV/HMMcopy/preload/gc"  # 替换为实际的输出目录
+OUTPUT_DIR="preload/gc"  # 替换为实际的输出目录
 mkdir -p "${OUTPUT_DIR}"
 
 # === 定义标准染色体列表 ===
