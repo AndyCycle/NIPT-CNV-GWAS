@@ -184,6 +184,84 @@ run_nipt_gwas <- function(int_mat_file, sample_list_file,
 
   report_mem("Step3: Meta Aligned")
 
+  # =========================================================
+  # [新增模块] 统计有效样本量 (Calculate Effective Sample Size)
+  # =========================================================
+  message(">> Calculating effective sample sizes...")
+
+  # 1. 快速读取对齐后的数据 (包含 FID, IID, Data...)
+  p_dt <- data.table::fread(pheno_ready)
+  c_dt <- data.table::fread(covar_ready)
+
+  # 2. 找到有效样本交集 (Pheno非NA 且 Covar完整非NA)
+  # 注意：MatrixEQTL 会自动剔除任何含有 NA 的列(样本)
+
+  # 获取表型值 (假设第3列开始是数据，前两列是FID IID)
+  # 我们的 .align_meta 生成的文件格式是：ID(列名) ...
+  # MatrixEQTL转置后：行是变量，列是样本。但 .align_meta 生成的是 MatrixEQTL 格式：
+  # 第一行是 Header (ID)，第一列是 RowName。
+  # 等等，我们需要确认 .align_meta 输出的是 MatrixEQTL 要求的 SlicedData 格式：
+  # MatrixEQTL 要求：第一行 Header (SampleIDs)，第一列 RowNames (VariableNames)。
+
+  # 修正读取逻辑：读取 .align_meta 生成的文件
+  # 该文件第一行是 Header (id, Sample1, Sample2...)
+  # 实际上我们在内存里统计比较麻烦，因为 MatrixEQTL 会处理 NA。
+  # 最准确的方法是模拟 MatrixEQTL 的逻辑：
+
+  # 简单策略：提取两者的共有样本列名，且值不为 NA
+  # 因为我们之前的逻辑比较复杂，这里用一种更直接的方法：
+  # 分析 p_dt 和 c_dt 的数值部分
+
+  # 提取表型数值向量 (去除第一列变量名)
+  # p_dt 只有一行数据 (因为只选了一个表型)
+  pheno_vals <- as.numeric(p_dt[1, -1, with=FALSE]) # 第一行，排除第一列ID
+
+  # 提取协变量完整性
+  # 只要某一列(样本)在任意协变量上为NA，该样本就会被丢弃
+  # c_dt 可能有多行
+  covar_mat <- as.matrix(c_dt[, -1, with=FALSE])
+  covar_valid <- colSums(is.na(covar_mat)) == 0
+
+  # 表型也必须非 NA
+  pheno_valid <- !is.na(pheno_vals)
+
+  # 最终有效样本索引
+  valid_idx <- pheno_valid & covar_valid
+  final_y <- pheno_vals[valid_idx]
+
+  # 3. 判断数据类型并统计
+  n_stat <- list()
+  unique_y <- unique(final_y)
+  unique_cnt <- length(unique_y)
+
+  # 判定逻辑：如果唯一值数量 <= 5 且包含 0/1 或 1/2，视为二分类
+  is_binary <- FALSE
+  if (unique_cnt == 2) {
+    is_binary <- TRUE
+    # 排序：假设小的是Control，大的是Case
+    vals <- sort(unique_y)
+    n_ctrl <- sum(final_y == vals[1])
+    n_case <- sum(final_y == vals[2])
+
+    message(sprintf("   Type: Binary | Control(%s): %d | Case(%s): %d",
+                    vals[1], n_ctrl, vals[2], n_case))
+
+    n_stat$N_Control <- n_ctrl
+    n_stat$N_Case    <- n_case
+  } else {
+    # 连续变量
+    n_total <- length(final_y)
+    message(sprintf("   Type: Continuous | Total Samples: %d", n_total))
+    n_stat$N_Total <- n_total
+  }
+
+  # 清理内存
+  rm(p_dt, c_dt, pheno_vals, covar_mat); gc()
+
+  # =========================================================
+  # [结束新增模块]
+  # =========================================================
+
   # 6. Initialize Global MatrixEQTL Objects (Pheno/Covar)
   # 这部分只需加载一次
   message("Loading Phenotype and Covariates into RAM...")
