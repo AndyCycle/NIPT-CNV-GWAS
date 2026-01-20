@@ -16,8 +16,9 @@ normalize_matrix <- function(input_mat, output_mat, k = 0.375) {
   on.exit({ close(con_in); close(con_out) })
 
   # Copy Header
-  header <- readLines(con_in, n = 1)
-  writeLines(header, con_out)
+  header_line <- readLines(con_in, n = 1)
+  if (length(header_line) == 0) stop("Empty input matrix")
+  writeLines(header_line, con_out) # 原样写入 Header (保留样本ID)
 
   cnt <- 0
 
@@ -27,8 +28,11 @@ normalize_matrix <- function(input_mat, output_mat, k = 0.375) {
 
     # Process Chunk
     processed_lines <- vapply(lines, function(line) {
-      parts <- strsplit(line, "\t")[[1]]
+      parts <- strsplit(line, "\t", fixed = TRUE)[[1]] # 使用 fixed=TRUE 加速
       bin_id <- parts[1]
+
+      # 注意：parts[1] 是行名，parts[-1] 是数据
+      # 必须确保 parts 长度一致。如果某行数据损坏（比如最后少个TAB），as.numeric会产生NA
       vals <- as.numeric(parts[-1])
 
       # INT Logic
