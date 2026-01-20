@@ -52,7 +52,9 @@ normalize_matrix <- function(input_mat, output_mat, k = 0.375) {
       vals_str <- as.character(vals)
       vals_str[is.na(vals)] <- "NA"
 
-      paste0(bin_id, "\t", paste(vals_str, collapse = "\t"))
+      # ++++++ 更稳健的拼接 ++++++
+      paste(c(bin_id, vals_str), collapse = "\t")
+      # ++++++++++++++++++++++++++++++++
     }, FUN.VALUE = character(1), USE.NAMES = FALSE)
 
     writeLines(processed_lines, con_out)
