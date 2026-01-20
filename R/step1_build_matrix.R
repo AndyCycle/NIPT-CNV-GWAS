@@ -21,6 +21,10 @@ build_cnv_matrix <- function(input_dir, output_prefix, gc_file, map_file,
   # Check system requirements
   if (.Platform$OS.type != "unix") stop("This package requires a Unix-like OS (Linux/macOS) for efficient IO.")
 
+  # 自动创建输出目录
+  out_dir <- dirname(output_prefix)
+  if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
+
   # Define outputs
   out_mat <- paste0(output_prefix, ".cnv_raw.txt")
   out_samples <- paste0(output_prefix, ".sample_ids.txt")
@@ -29,6 +33,25 @@ build_cnv_matrix <- function(input_dir, output_prefix, gc_file, map_file,
   # File scanning
   # 使用参数 file_pattern 替代原来的硬编码字符串
   wig_files <- list.files(input_dir, pattern = file_pattern, full.names = TRUE, recursive = TRUE)
+
+  # ++++++ 优化 1: 统一且严格的 ID 清洗与去重 ++++++
+  # 先去掉文件后缀
+  raw_ids <- sub(file_pattern, "", basename(wig_files))
+  # 再去掉窗口后缀 (必须与下面 Processing Loop 中的逻辑完全一致)
+  clean_ids_scan <- sub("_[0-9]+bp$", "", raw_ids)
+
+  # 检查重复 (基于清洗后的 ID)
+  dupe_idx <- which(duplicated(clean_ids_scan))
+
+  if (length(dupe_idx) > 0) {
+      message(sprintf("Warning: Removed %d duplicated samples (same ID after cleaning)", length(dupe_idx)))
+      # 打印前几个重复的看看，方便排查
+      print(head(clean_ids_scan[dupe_idx]))
+
+      wig_files <- wig_files[-dupe_idx]
+  }
+  # ++++++++++++++++++++++++++++++++++++++++++++++
+
   if (length(wig_files) == 0) stop("No WIG files found in input_dir.")
 
   message(sprintf("Found %d samples. Starting build process...", length(wig_files)))
@@ -88,6 +111,10 @@ build_cnv_matrix <- function(input_dir, output_prefix, gc_file, map_file,
       # Extract Data
       mat_chunk <- do.call(cbind, lapply(batch_res, `[[`, "data"))
       ids_chunk <- vapply(batch_res, `[[`, "id", FUN.VALUE = character(1))
+
+      # ++++++ 优化 2: 显式赋予列名，确保 fwrite 写入正确的 Header ++++++
+      colnames(mat_chunk) <- ids_chunk
+      # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
       # Write Temp File
       tmp_f <- paste0(output_prefix, ".tmp_batch_", i, ".txt")
