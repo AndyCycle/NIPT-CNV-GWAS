@@ -16,10 +16,12 @@ run_nipt_gwas <- function(int_mat_file, sample_list_file,
                           pheno_file, covar_file,
                           output_file, phenotype_col,
                           chunk_size = 10000, # 新增参数：每次处理1万个Bin
+                          n_cores = 1, # <--- 新增参数：并行核数
                           tmp_dir = tempdir()) {
 
   requireNamespace("MatrixEQTL")
   requireNamespace("data.table")
+  requireNamespace("parallel") # 引入并行包
   report_mem("Step3: Start")
 
   # === Init ===
@@ -33,11 +35,13 @@ run_nipt_gwas <- function(int_mat_file, sample_list_file,
   clean_source_file <- file.path(tmp_dir, "source_matrix_pure.txt")
   bin_ids_file      <- file.path(tmp_dir, "bin_ids.txt")
 
-  message(">> Preparing GWAS Environment...")
+  message(sprintf(">> Preparing GWAS Environment (Cores: %d)...", n_cores))
 
   # 1. Load Anchor IDs
   if (!file.exists(sample_list_file)) stop("Sample list file missing.")
   anchor_ids <- readLines(sample_list_file)
+  anchor_ids <- anchor_ids[anchor_ids != ""] # 去除空行
+  anchor_ids <- unique(anchor_ids)           # 再次强制去重
   n_expected <- length(anchor_ids)
 
   # 2. Detect Physical Dimensions
@@ -282,122 +286,124 @@ run_nipt_gwas <- function(int_mat_file, sample_list_file,
 
   report_mem("Step3: Meta Loaded")
 
-  # 7. Physical Chunking Loop (The Memory Solver)
-
-  # 初始化结果文件 (写入 Header)
-  cat("SNP\tgene\tbeta\tt-stat\tp-value\tFDR\n", file = output_file)
+  # =========================================================
+  # 7. Parallel Physical Chunking Loop
+  # =========================================================
 
   n_chunks <- ceiling(n_snps / chunk_size)
-  message(sprintf(">> Starting GWAS in %d physical chunks (Size: %d)...", n_chunks, chunk_size))
+  message(sprintf(">> Starting GWAS in %d chunks (Parallel Cores: %d)...", n_chunks, n_cores))
 
-  # 构造一个带列名的 Header 文件用于合并
-  # 我们需要创建一个只有 Header 的文件，用于每次和 chunk 数据合并，骗过 MatrixEQTL
+  # 准备 Header 文件路径 (在并行中只读不写，安全)
   chunk_header_file <- file.path(tmp_dir, "chunk_header.txt")
-  # Header 必须不含 "id" (因为纯数据没有id列), 只有样本名
   writeLines(paste(final_ids, collapse = "\t"), chunk_header_file)
 
-  for (i in 1:n_chunks) {
-    # 计算行号范围
+  # --- 定义并行处理函数 ---
+  process_chunk <- function(i) {
+    # 每个子进程需要独立的临时文件，否则会冲突！
+    # 使用 PID 或 index 区分
+    my_tmp_raw   <- file.path(tmp_dir, paste0("raw_chunk_", i, ".txt"))
+    my_tmp_ready <- file.path(tmp_dir, paste0("ready_chunk_", i, ".txt"))
+    my_tmp_res   <- file.path(tmp_dir, paste0("chunk_res_", i, ".txt"))
+
     start_row <- (i - 1) * chunk_size + 1
     end_row   <- min(i * chunk_size, n_snps)
     n_rows_chunk <- end_row - start_row + 1
 
-    message(sprintf("--- Processing Chunk %d/%d (Bin %d - %d) ---", i, n_chunks, start_row, end_row))
-
-    # A. 提取纯数据块 (System Call)
-    # tail -n +K | head -n N
-    raw_chunk <- file.path(tmp_dir, "raw_chunk.txt")
+    # A. 提取数据 (System Call)
     cmd_extract <- sprintf("tail -n +%d %s | head -n %d > %s",
                            start_row, shQuote(clean_source_file),
-                           n_rows_chunk, shQuote(raw_chunk))
+                           n_rows_chunk, shQuote(my_tmp_raw))
     system(cmd_extract)
 
-    # B. 合并 Header + Data
-    # MatrixEQTL 需要 Header 才能正确识别列数 (Lazy Mode)
-    ready_chunk <- file.path(tmp_dir, "ready_chunk.txt")
-    # cat header data > ready
-    system(paste("cat", shQuote(chunk_header_file), shQuote(raw_chunk), ">", shQuote(ready_chunk)))
+    # B. 合并 Header
+    system(paste("cat", shQuote(chunk_header_file), shQuote(my_tmp_raw), ">", shQuote(my_tmp_ready)))
 
     # C. 加载 SNP Chunk
+    # 注意：在 mclapply 中，SlicdeData 对象是 Copy-on-Write 的，读取是安全的
     snps <- MatrixEQTL::SlicedData$new()
     snps$fileDelimiter <- "\t"
     snps$fileOmitCharacters <- "NA"
-    snps$fileSkipRows <- 1      # 跳过 Header
-    snps$fileSkipColumns <- 0   # 无行名
+    snps$fileSkipRows <- 1
+    snps$fileSkipColumns <- 0
     snps$fileSliceSize <- 2000
-
-    snps$LoadFile(ready_chunk)
+    snps$LoadFile(my_tmp_ready)
 
     # 设置行名
     rownames(snps) <- bin_ids[start_row:end_row]
 
     # D. 运行引擎
-    tmp_res <- file.path(tmp_dir, "chunk_res.txt")
+    # 结果先写到该进程独有的临时文件
+    me <- MatrixEQTL::Matrix_eQTL_engine(
+      snps = snps,
+      gene = gene,
+      cvrt = cvrt,
+      output_file_name = my_tmp_res,
+      pvOutputThreshold = 1.0,
+      useModel = MatrixEQTL::modelLINEAR,
+      errorCovariance = numeric(),
+      verbose = FALSE,
+      pvalue.hist = FALSE,
+      min.pv.by.genesnp = FALSE,
+      noFDRsaveMemory = FALSE
+    )
 
-    # 捕获可能的空结果错误
-    tryCatch({
-      me <- MatrixEQTL::Matrix_eQTL_engine(
-        snps = snps,
-        gene = gene,
-        cvrt = cvrt,
-        output_file_name = tmp_res,
-        pvOutputThreshold = 1.0,  # <--- 修改点 1: 设为 1.0，保留所有P值
-                                  # 因为 Bin 总数不多(15w)，全保留也不会很大(约10MB)
-                                  # 这对后续 FDR 计算最准确。
-        useModel = MatrixEQTL::modelLINEAR,
-        errorCovariance = numeric(),
-        verbose = FALSE,
-        pvalue.hist = FALSE,
-        min.pv.by.genesnp = FALSE,
-        noFDRsaveMemory = FALSE
-      )
-
-      # E. 追加结果 (跳过 Header)
-      if (file.exists(tmp_res)) {
-        # 检查是否包含数据
-        n_res_lines <- as.integer(strsplit(system(paste("wc -l", tmp_res), intern=TRUE), " ")[[1]][1])
-        if (n_res_lines > 1) {
-           system(paste("tail -n +2", shQuote(tmp_res), ">>", shQuote(output_file)))
-        }
+    # E. 读取结果并返回 Data.Table
+    res_chunk <- NULL
+    if (file.exists(my_tmp_res)) {
+      # 检查文件是否为空 (只有Header算空)
+      if (file.size(my_tmp_res) > 50) {
+        res_chunk <- data.table::fread(my_tmp_res, header = TRUE)
       }
-    }, error = function(e) {
-      message(sprintf("Warning: Chunk %d failed. Error: %s", i, e$message))
-    })
+      file.remove(my_tmp_res) # 读完即删
+    }
 
-    # F. 清理本次循环内存
-    rm(snps, me)
-    gc()
+    # 清理中间文件
+    file.remove(my_tmp_raw, my_tmp_ready)
+    rm(snps, me); gc(verbose = FALSE)
 
-    # 每 5 个 Chunk 报一次内存
-    if(i %% 5 == 0) report_mem(sprintf("Chunk %d Done", i))
+    return(res_chunk)
   }
 
-  # =========================================================
-  # 8. [新增] Post-hoc FDR Recalculation (全局 FDR 修正)
-  # =========================================================
-  message(">> Recalculating Global FDR...")
+  # --- 执行并行 ---
+  # 使用 mclapply (Linux only)
+  results_list <- parallel::mclapply(1:n_chunks, process_chunk, mc.cores = n_cores)
 
-  # 使用 data.table 快速读取合并后的结果
-  # 15万行数据瞬间就能读完，内存占用极低
-  res_dt <- data.table::fread(output_file, header = TRUE)
+  # --- 汇总结果 ---
+  message(">> Aggregating results from all cores...")
 
-  if (nrow(res_dt) > 0) {
-    # 核心修正：使用 Benjamini-Hochberg 方法重算 FDR
-    # 这里的 n 自动等于总行数 (Total Bins)
-    res_dt$FDR <- p.adjust(res_dt$`p-value`, method = "BH")
+  # 剔除 NULL (失败或空的 Chunk)
+  results_list <- Filter(Negate(is.null), results_list)
 
-    # 覆盖原文件
-    data.table::fwrite(res_dt, output_file, sep = "\t", quote = FALSE)
-    message(sprintf(">> Global FDR updated. Total SNPs: %d", nrow(res_dt)))
+  if (length(results_list) > 0) {
+    final_dt <- data.table::rbindlist(results_list)
+
+    # =========================================================
+    # 8. Post-hoc FDR Recalculation (全局 FDR 修正)
+    # =========================================================
+    message(">> Recalculating Global FDR & Appending Sample Size...")
+
+    # 计算 FDR
+    final_dt$FDR <- p.adjust(final_dt$`p-value`, method = "BH")
+
+    # 追加 N (逻辑同之前)
+    if (exists("is_binary") && is_binary) {
+      final_dt$N_Ctrl <- n_stat$N_Control
+      final_dt$N_Case <- n_stat$N_Case
+    } else if (exists("n_stat")) {
+      final_dt$N_Total <- n_stat$N_Total
+    }
+
+    # 写入最终文件
+    data.table::fwrite(final_dt, output_file, sep = "\t", quote = FALSE)
+    message(sprintf(">> Output written to: %s", output_file))
+
   } else {
-    warning("Result file is empty.")
+    warning("No results generated from any chunk!")
+    file.create(output_file) # 创建空文件防止下游报错
   }
 
   # 9. Cleanup
   file.remove(clean_source_file, bin_ids_file, chunk_header_file)
-  if(file.exists(file.path(tmp_dir, "raw_chunk.txt"))) file.remove(file.path(tmp_dir, "raw_chunk.txt"))
-  if(file.exists(file.path(tmp_dir, "ready_chunk.txt"))) file.remove(file.path(tmp_dir, "ready_chunk.txt"))
-  if(file.exists(file.path(tmp_dir, "chunk_res.txt"))) file.remove(file.path(tmp_dir, "chunk_res.txt"))
   if (file.exists(pheno_ready)) file.remove(pheno_ready)
   if (file.exists(covar_ready)) file.remove(covar_ready)
 
