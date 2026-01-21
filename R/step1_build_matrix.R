@@ -134,6 +134,24 @@ build_cnv_matrix <- function(input_dir, output_prefix, gc_file, map_file,
     cmd <- paste("paste", out_mat, paste(temp_files, collapse = " "), ">", paste0(out_mat, ".tmp"))
     if (system(cmd) != 0) stop("Merge failed.")
 
+    # ++++++ 新增：强制完整性检查 ++++++
+    # 检查 Raw Matrix 的第一行数据列数
+    check_cmd <- sprintf("head -n 2 %s | tail -n 1 | awk -F'\t' '{print NF}'", out_mat)
+    n_cols_raw <- as.integer(system(check_cmd, intern = TRUE))
+
+    # 预期列数 = 1 (BinID) + 样本数
+    n_expected <- length(valid_samples) + 1
+
+    if (n_cols_raw < n_expected) {
+        n_diff <- n_expected - n_cols_raw
+        message(sprintf("WARNING: Merge discrepancy detected! Matrix missing %d columns at the end.", n_diff))
+        message("Auto-trimming valid_samples list to match matrix...")
+
+        # 自动裁剪 ID 列表，确保对齐
+        valid_samples <- head(valid_samples, n = length(valid_samples) - n_diff)
+    }
+    # ++++++++++++++++++++++++++++++++
+
     file.rename(paste0(out_mat, ".tmp"), out_mat)
     unlink(temp_files)
 
